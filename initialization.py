@@ -41,7 +41,8 @@ def initialize():
 
     caps = DesiredCapabilities.CHROME
     caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-
+    
+    #Specify the location of the chromedriver below
     driver = webdriver.Chrome("/path/to/chromedriver",  chrome_options=opts, desired_capabilities=caps)
 
     WebDriver.add_script = add_script
