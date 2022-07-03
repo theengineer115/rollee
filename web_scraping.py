@@ -1,26 +1,19 @@
-from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 import time
 from initialization import initialize
+import json
+
 
 # dictionary to keep all token - username, password key value pairs in memory
 user_storage = {}
 
-# get text attribute from element
-def get_txt_attr(var, var_name):
-    text = None
-    try:
-        text = var.text
-    except Exception as e:
-        print(f'failed to get {var_name}')
-        print(f'error code {e}')
-        print(f'{var_name} received {var}')
-        pass
 
-    return text
+def process_browser_log_entry(entry):
+    response = json.loads(entry['message'])['message']
+    return response
 
 def login(driver, username, password):
     login_url = "https://app.comet.co/freelancer/signin?to=%2Ffreelancer%2Fdashboard"
@@ -91,170 +84,85 @@ def UserInfo(token):
     # logged in
 
     driver.get(profile_url)
-
-    # get the required information
-    name = 'Empty or Error'
-
-    title = 'Empty or Error'
-
-    profile_pic = 'Empty or Error'
-
-    experience_title = 'Empty or Error'
-
-    s_name = 'Empty or Error'
-
-    years = 'Empty or Error'
-
-    infos = []
-
-    skills = []
-
     time.sleep(3)
 
-    dict_info = {}
+    browser_log = driver.get_log('performance')
+    events = [process_browser_log_entry(entry) for entry in browser_log]
+    events = [event for event in events if 'Network.response' in event['method']]
 
-    # grab the html for parsing
-    html = driver.page_source
-    # close the page
-    driver.quit()
-    # begin parsing
-    soup = BeautifulSoup(html, 'html.parser')
+    result = {}
+    # need:
 
-    main_div = soup.find('div', {'class': 'd-flex flex-column MeView_main_rWiQ9'})
+    # name
+    # email
+    # title
+    # image url
+    # phone number
+    # biography
 
-    profile = main_div.find('div', {'class': 'flex'})
-    #####################################################################
+    # skills array
+    # for every skill name and years of exp
 
-    profile_pic = main_div.find('div', {'class': 'v-image__image v-image__image--cover'})
-    profile_pic = profile_pic.get('style')
-    profile_pic = profile_pic.replace('background-image: url("', '')
+    # experience title
+    # experience array
+    # for every experience name of company, title, time and skills used there
 
-    profile_pic = profile_pic.replace('"); background-position: center center;', '')
-    #####################################################################
-
-    name = profile.find('div', {'class': 'v-card__title headline font-weight-bold pa-0 pt-1 FreelancerDetails_fullName_1BIGR'})
-
-    name = get_txt_attr(name, 'name')
-
-    title = profile.find('div', {'class': 'v-card__subtitle black--text pt-0 pb-2 FreelancerDetails_subtitle_2yLrJ'})
-
-    title = get_txt_attr(title, 'title')
-    #####################################################################
-
-    divs = profile.find_all('div', {'class': 'FreelancerDetails_infos_2weto'})
-
-    for div in divs:
-
-        info = None
-        info = get_txt_attr(div, 'info')
-
-        infos.append(info)
-    #####################################################################
-
-    dict_info['name'] = name
-    dict_info['title'] = title
-    dict_info['image'] = profile_pic
-    dict_info['general_info'] = infos
-    #####################################################################
-
-    div_skills = main_div.find('div', {'class': 'mb-6 v-card v-sheet theme--light FreelancerProfileSkills_freelancerProfileSkills_3L4js'})
-    inside_div = div_skills.find('div', {'class': 'd-flex flex-row flex-wrap align-center mt-1 FreelancerSkillsField_skills_-bj0l'})
-    spans = inside_div.find_all('span', {'class': 'body-3 v-chip v-chip--no-color v-chip--outlined theme--light v-size--default CChipTalent_root_3Xor7 FreelancerSkillsField_chip_63cvk'})
-
-    for span in spans:
-
-        skills_2 = []
-        skill_name = span.find('span', {'class': 'v-chip__content'})
-        skill_name = skill_name.find_all('span')
-
+    for event in events:
         try:
-            s_name = get_txt_attr(skill_name[0], 'Skill Name')
-        except Exception as e:
-            print(f'error code {e}')
+            req_type = event["params"]["type"]
+            req_url = event["params"]["response"]["url"]
+
+            if req_type == "Fetch" and req_url == "https://app.comet.co/api/graphql":
+                operation_name = json.loads(driver.execute_cdp_cmd('Network.getRequestPostData', {'requestId': event["params"]["requestId"]})["postData"])["operationName"]
+                data = json.loads(driver.execute_cdp_cmd('Network.getResponseBody', {'requestId': event["params"]["requestId"]})["body"])["data"]
+                # valid request, process data here
+
+                # from AppUser operation can get name, title, image url and experience title (biography)
+                if operation_name == "AppUser":
+                    name = data["me"]["fullName"]
+                    email = data["me"]["email"]
+                    job_title = data["me"]["jobTitle"]
+                    phone_number = data["me"]["phoneNumber"]
+                    image_url = data["me"]["profilePictureUrl"]
+                    biography = data["me"]["freelance"]["biography"]
+                    result["name"] = name
+                    result["email"] = email
+                    result["job_title"] = job_title
+                    result["phone_number"] = phone_number
+                    result["image_url"] = image_url
+                    result["biography"] = biography
+
+                # from FreelancerProfileSkills operation can get skills
+                if operation_name == "FreelancerProfileSkills":
+                    skills_arr = []
+                    for skill in data["freelance"]["skills"]:
+                        skill_obj = {}
+                        skill_name = skill["name"] 
+                        skill_years = skill["duration"]
+                        skill_obj["name"] = skill_name
+                        skill_obj["years"] = skill_years
+                        skills_arr.append(skill_obj)
+                    result["skills"] = skills_arr
+
+                # from FreelancerExperiences operation can get experiences
+                if operation_name == "FreelancerExperiences":
+                    exp_arr = []
+                    for exp in data["freelance"]["experiences"]:
+                        exp_obj = {}
+                        exp_company_name = exp["companyName"] 
+                        exp_work_period = f"From {exp['startDate'].split('T')[0]} to {exp['endDate'].split('T')[0]}"
+                        exp_description = exp["description"]
+                        exp_skills = []
+                        for exp_skill in exp["skills"]:
+                            exp_skills.append(exp_skill["name"])
+                        exp_obj["company_name"] = exp_company_name
+                        exp_obj["work_period"] = exp_work_period
+                        exp_obj["description"] = exp_description
+                        exp_obj["skills"] = exp_skills
+                        exp_arr.append(exp_obj)
+                    result["experiences"] = exp_arr
+
+        except:
             pass
 
-        try:
-            years = get_txt_attr(skill_name[3], 'Years of experience')
-        except Exception as e:
-            print(f'error code {e}')
-            pass
-
-        skills_2.append(s_name)
-        skills_2.append(years)
-        skills.append(skills_2)
-
-    dict_info['skills'] = skills
-    #####################################################################
-
-    experience = main_div.find('div', {'class': 'pa-4 pt-3 mb-6 v-card v-sheet theme--light FreelancerFullResume_freelancerExperiences_35IPk'})
-
-    experience_titles = experience.find_all('div')
-
-    temp_exp_title = None
-
-    for experience_title in experience_titles:
-        try:
-            if experience_title.has_attr('data-cy-freelancer-biography'):
-                temp_exp_title = get_txt_attr(experience_title, "experience title")
-        except Exception as e:
-            print(f'error code {e}')
-            pass
-
-    dict_info['Exp_Title'] = temp_exp_title
-
-    experiences = experience.find('div', {'id': 'freelancerProfileExperiences'})
-
-    temp_list = []
-
-    try:
-        list_experiences = experiences.select("div[id^=experience-]")
-
-        for l_exp in list_experiences:
-
-            div_exp = None
-            work_category = None
-
-            div_exp = l_exp.find('div', {'class': 'd-flex body-2 mb-2 FreelancerExperiences_header_1jR2S'})
-
-            work_category = div_exp.find('div', {'class': 'd-flex align-center overline secondary--text'})
-            work_category = get_txt_attr(work_category, 'Work Category')
-
-            work_title = div_exp.find('span', {'class': 'font-weight-semi-bold pr-1 title'})
-            work_title = get_txt_attr(work_title, 'Work Title')
-
-            work_years = div_exp.find('div', {'class': 'body-2 secondary--text text--pre-line caption'})
-            work_years = get_txt_attr(work_years, 'Work Years')
-
-            work_skills = l_exp.find('div', {'class': 'FreelancerExperiences_skills_1N6ZB'})
-
-            work_skills_ = []
-            try:
-                work_skills_ = work_skills.select("span[class^=Tag_name]")
-            except Exception as e:
-                print(e)
-
-
-            work_skills__ = []
-
-            try:
-                if len(work_skills_) > 0:
-                    for w_s in work_skills_:
-                        temp_var = None
-                        temp_var = w_s
-                        temp_var = get_txt_attr(temp_var, 'work skill')
-                        work_skills__.append(temp_var)
-            except Exception as e:
-                print(e)
-            
-
-            temp_list.append(work_category)
-            temp_list.append(work_title)
-            temp_list.append(work_years)
-            temp_list.append(work_skills__)
-    except:
-        pass
-
-    dict_info['experiences'] = temp_list
-
-    # return final user info
-    return dict_info
+    return result
